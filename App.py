@@ -32,18 +32,31 @@ st.markdown("""
     
     /* Code Snippet Box */
     .snippet-box {
-        background-color: #ffffff;
+        background-color: #f6f8fa;
         border: 1px solid #d0d7de;
-        border-left: 4px solid #d73a49; /* Red error line */
+        border-left: 4px solid #cf222e; /* Red error line */
         padding: 12px;
         font-family: 'SFMono-Regular', Consolas, monospace;
         font-size: 0.85rem;
         margin: 8px 0;
         color: #24292e;
         white-space: pre-wrap;
-        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        overflow-x: auto;
     }
     
+    /* Line Number Badge */
+    .location-badge {
+        background-color: #24292e;
+        color: #fff;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        margin-right: 8px;
+        display: inline-block;
+        margin-bottom: 5px;
+    }
+
     /* Sidebar */
     section[data-testid="stSidebar"] { background-color: #f6f8fa; border-right: 1px solid #d0d7de; }
     section[data-testid="stSidebar"] * { color: #24292e !important; }
@@ -57,30 +70,7 @@ st.markdown("""
     }
     .stTextArea textarea:focus, .stTextInput input:focus {
         border-color: #1a7f37 !important;
-        box-shadow: 0 0 0 1px #1a7f37 !important;
     }
-    
-    /* Button */
-    div.stButton > button {
-        background-color: #1a7f37;
-        color: white !important;
-        border: none;
-    }
-    div.stButton > button:hover {
-        background-color: #16692e;
-    }
-
-    /* Metrics */
-    .metric-container {
-        background-color: #ffffff;
-        border: 1px solid #e1e4e8;
-        border-radius: 6px;
-        padding: 20px;
-        text-align: center;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-    }
-    .metric-val { font-size: 2.2rem; font-weight: 700; margin-bottom: 5px; }
-    .metric-label { font-size: 0.85rem; color: #586069; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
 
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     [data-testid="stDataFrame"] { border: 1px solid #e1e4e8; }
@@ -88,7 +78,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. LOGIC ENGINE
+# 2. LOGIC ENGINE (Source Code Extraction)
 # -----------------------------------------------------------------------------
 
 def fetch_html(url):
@@ -102,40 +92,40 @@ def fetch_html(url):
         return None, str(e)
 
 def get_location_tag(tag, index_map):
-    """Attempts to find line number, falls back to readable index."""
-    # 1. Try lxml sourceline
+    # Try lxml sourceline
     line = getattr(tag, 'sourceline', None)
-    if line:
-        return f"Line {line}"
+    if line: return f"Line {line}"
     
-    # 2. Fallback: Nth occurrence
+    # Fallback: Nth occurrence
     tag_name = tag.name
     if tag_name not in index_map: index_map[tag_name] = 0
     index_map[tag_name] += 1
-    return f"{tag_name} tag #{index_map[tag_name]}"
+    return f"#{index_map[tag_name]}"
 
-def reconstruct_tag(tag):
-    """Manually rebuilds the tag string."""
+def get_raw_html_snippet(tag):
+    """
+    Returns the EXACT HTML string of the opening tag.
+    Example: <div class="nav" id="menu"> instead of "Menu Text"
+    """
+    # Convert the tag to string but stop before the closing > to avoid inner content bloat
+    # Then manually close it.
     try:
-        attrs = []
-        for k, v in tag.attrs.items():
-            if isinstance(v, list): v = " ".join(v)
-            attrs.append(f'{k}="{v}"')
+        # This gets the tag as a string, e.g. <div class="foo">content</div>
+        full_str = str(tag)
         
-        attr_str = " " + " ".join(attrs) if attrs else ""
+        # Find the end of the opening tag
+        closing_bracket = full_str.find('>')
         
-        content_sample = tag.get_text(" ", strip=True)[:60]
-        if content_sample:
-            content_display = f"\n  {content_sample}..."
+        if closing_bracket != -1:
+            # Return just the opening tag: <div class="foo">
+            return full_str[:closing_bracket+1]
         else:
-            content_display = ""
-
-        return f"<{tag.name}{attr_str}>{content_display}\n</{tag.name}>"
+            return full_str[:100] # Fallback
     except:
-        return f"<{tag.name}>... (Complex Tag)"
+        return f"<{tag.name}>"
 
 def analyze_html(html_content):
-    # Try to use lxml for line numbers
+    # Prefer lxml for line numbers
     try:
         soup = BeautifulSoup(html_content, 'lxml')
     except:
@@ -154,7 +144,7 @@ def analyze_html(html_content):
                 "Severity": "High",
                 "Issue": "Missing Alt Text",
                 "Location": loc,
-                "Snippet": reconstruct_tag(img),
+                "Snippet": get_raw_html_snippet(img),
                 "Fix": 'Add alt="Description of image"',
                 "Why": "Screen readers cannot describe this image to visually impaired users."
             })
@@ -167,7 +157,7 @@ def analyze_html(html_content):
             "Severity": "High",
             "Issue": "Missing H1 Tag",
             "Location": "Global",
-            "Snippet": "<html>...</html>",
+            "Snippet": "<html>",
             "Fix": "Add exactly one <h1> containing the main topic.",
             "Why": "Search engines use H1 as the primary signal for page relevance."
         })
@@ -179,7 +169,7 @@ def analyze_html(html_content):
                 "Severity": "Medium",
                 "Issue": "Multiple H1 Tags",
                 "Location": loc,
-                "Snippet": reconstruct_tag(h1),
+                "Snippet": get_raw_html_snippet(h1),
                 "Fix": "Change to <h2> or <div>.",
                 "Why": "Multiple H1s dilute the topical focus of the page."
             })
@@ -188,34 +178,37 @@ def analyze_html(html_content):
     # --- 3. DIVITIS DETECTOR ---
     potential_navs = soup.find_all('div', class_=re.compile(r'nav|menu|header', re.I))
     for div in potential_navs:
+        # Filter: Must have links inside to be a nav
         if div.find('a'):
             loc = get_location_tag(div, index_map)
             findings.append({
                 "Severity": "Medium",
                 "Issue": "Generic <div> used for Navigation",
                 "Location": loc,
-                "Snippet": reconstruct_tag(div),
+                "Snippet": get_raw_html_snippet(div),
                 "Fix": "Rename <div> to <nav>.",
                 "Why": "Assistive tech can jump directly to <nav> landmarks."
             })
             score_deductions += 5
 
+    # --- 4. BUTTON CHECK ---
     bad_links = soup.find_all('a')
     for a in bad_links:
         href = a.get('href', '').strip()
+        # Check if it's a JS trigger
         if not href or href.startswith('javascript') or href == '#':
             loc = get_location_tag(a, index_map)
             findings.append({
                 "Severity": "Low",
                 "Issue": "Anchor <a> used as Button",
                 "Location": loc,
-                "Snippet": reconstruct_tag(a),
+                "Snippet": get_raw_html_snippet(a),
                 "Fix": "Use <button> for JS actions.",
                 "Why": "Anchors are for navigation. Buttons are for actions."
             })
             score_deductions += 2
 
-    # --- 4. LANDMARK AUDIT ---
+    # --- 5. LANDMARK CHECK ---
     if not soup.find('main'):
         findings.append({
             "Severity": "High",
@@ -229,13 +222,10 @@ def analyze_html(html_content):
 
     final_score = max(0, 100 - score_deductions)
     
-    # --- 5. SKELETON BUILDER ---
+    # Structure Map
     structure_map = []
     for tag in soup.find_all(['h1', 'h2', 'h3', 'h4', 'main', 'nav', 'header', 'footer']):
         indent = 0
-        
-        # BUG FIX: Explicitly check if it is H1-H6 before calculating indent
-        # This prevents 'header' (which starts with 'h') from crashing int('e')
         if tag.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
             indent = int(tag.name[1])
         
@@ -258,9 +248,9 @@ with st.sidebar:
     st.markdown("### ⚙️ Configuration")
     st.markdown("""
     **Parser:** `lxml` (Robust)
-    <div style="font-size:0.85rem; color:#586069; background:#f6f8fa; padding:12px; border-left:3px solid #1a7f37;">
+    <div class="tech-note">
     <b>Forensic Mode:</b> 
-    This engine reconstructs HTML tags so you can identify them in source code even if line numbers are lost (e.g. minified code).
+    This engine extracts the <b>Raw Source Code</b> of the opening tag (including classes and IDs) so you can identify the element even in minified code.
     </div>
     """, unsafe_allow_html=True)
 
