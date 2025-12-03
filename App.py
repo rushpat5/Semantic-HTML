@@ -52,7 +52,7 @@ st.markdown("""
     .tree-h2 { font-weight: 600; color: #24292e; margin-left: 20px; }
     .tree-h3 { color: #586069; margin-left: 40px; }
     .tree-h4 { color: #6e7781; margin-left: 60px; font-style: italic; }
-    .tree-error { color: #cf222e; font-weight: bold; }
+    .tree-error { color: #cf222e; font-weight: bold; background: #ffebe9; padding: 2px 5px; border-radius: 4px; font-size: 0.8rem; }
 
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
@@ -76,7 +76,8 @@ def get_tag_preview(tag):
     """Returns the opening tag as a string (e.g. <div class='header'>)."""
     if not tag: return ""
     attrs = " ".join([f'{k}="{v if isinstance(v, str) else " ".join(v)}"' for k,v in tag.attrs.items()])
-    return f"<{tag.name} {attrs}>"
+    # Escape HTML characters so they show up in the UI
+    return html.escape(f"<{tag.name} {attrs}>")
 
 def audit_logic(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -130,8 +131,6 @@ def audit_logic(html_content):
             prev_level = curr_level
 
     # --- B. SEMANTIC INFERENCE (Detecting "Fake" Semantics) ---
-    # We look for <div>s that SHOULD be semantic tags based on their Class/ID names
-    
     semantic_map = {
         "header": ["header", "top", "banner"],
         "nav": ["nav", "menu", "navigation", "links"],
@@ -146,10 +145,9 @@ def audit_logic(html_content):
         attrs = attrs.lower()
         
         for tag_name, keywords in semantic_map.items():
-            # Check if div has class="main-header" but is just a div
             if any(k in attrs for k in keywords) and not div.find_parent(tag_name):
-                # Limit reporting to avoid spamming
-                if len([x for x in issues if x['Title'] == f"Generic <div> used for {tag_name}"]) < 2:
+                # Check if we already flagged this type to avoid spam
+                if len([x for x in issues if x['Title'] == f"Generic <div> used for {tag_name}"]) < 1:
                     issues.append({
                         "Category": "Semantics", "Severity": "Medium",
                         "Title": f"Generic <div> used for {tag_name}",
@@ -186,7 +184,6 @@ def audit_logic(html_content):
         })
         score_deductions += 10
 
-    # Calculate Final Score
     final_score = max(0, 100 - score_deductions)
     
     return final_score, issues, headings
@@ -222,7 +219,6 @@ with st.sidebar:
 st.title("Semantic HTML Architect")
 st.markdown("### Structural SEO & Accessibility Audit")
 
-# Input
 url_input = st.text_input("Enter URL to Audit", placeholder="https://example.com")
 run_btn = st.button("Run Structural Audit", type="primary")
 
@@ -234,15 +230,13 @@ if run_btn and url_input:
     if error:
         st.error(f"Failed to fetch URL: {error}")
     else:
-        # Run Analysis
         score, issues, headings_list = audit_logic(html_content)
         
-        # --- SECTION 1: EXECUTIVE SUMMARY ---
+        # --- SECTION 1: SCORE ---
         st.markdown("---")
         c1, c2 = st.columns([1, 3])
         
         with c1:
-            # Score Gauge
             color = "#1a7f37" if score >= 90 else "#d29922" if score >= 60 else "#d73a49"
             st.markdown(f"""
             <div style="text-align:center; border:2px solid {color}; border-radius:10px; padding:20px;">
@@ -254,45 +248,43 @@ if run_btn and url_input:
         with c2:
             st.markdown("### 📊 Audit Summary")
             if score == 100:
-                st.success("Perfect Score! Your HTML structure is semantic, accessible, and optimized for search engines.")
+                st.success("Perfect Score! Your HTML structure is semantic, accessible, and optimized.")
             else:
-                st.markdown(f"We found **{len(issues)} architectural issues** that may confuse search engines or block screen readers. Prioritize **Critical** errors immediately.")
+                st.markdown(f"We found **{len(issues)} architectural issues**. Prioritize **Critical** errors immediately.")
 
-        # --- SECTION 2: VISUAL DOCUMENT OUTLINE (The "Hierarchy" Check) ---
+        # --- SECTION 2: HEADING TREE (FIXED) ---
         st.markdown("---")
         st.subheader("1. Heading Hierarchy Visualizer")
         st.markdown("This is how Google bots 'read' your content outline. Look for broken indentation.")
         
         if headings_list:
-            tree_html = "<div style='background:#fff; padding:15px; border:1px solid #e1e4e8; border-radius:6px; max-height:300px; overflow-y:auto;'>"
-            prev_lvl = 0
+            tree_html = "<div style='background:#fff; padding:15px; border:1px solid #e1e4e8; border-radius:6px; max-height:400px; overflow-y:auto;'>"
+            prev_level = 0  # Fixed variable name
             
             for h in headings_list:
                 lvl = int(h.name[1])
                 text = h.get_text(strip=True)[:60]
                 
-                # Styling based on level
                 style_class = f"tree-{h.name}"
                 indent = "&nbsp;" * ((lvl - 1) * 4)
                 
-                # Logic Check
                 error_marker = ""
-                if lvl > prev_level + 1 and prev_lvl != 0:
+                # Logic check: Skipping levels (e.g. H2 -> H4)
+                if lvl > prev_level + 1 and prev_level != 0:
                      error_marker = " <span class='tree-error'>[⚠ SKIPPED LEVEL]</span>"
                 
                 tree_html += f"<div class='tree-node'>{indent}<span class='{style_class}'>&lt;{h.name}&gt;</span> {text}{error_marker}</div>"
-                prev_level = lvl
+                prev_level = lvl # Update tracker
                 
             tree_html += "</div>"
             st.markdown(tree_html, unsafe_allow_html=True)
         else:
             st.warning("No headings (H1-H6) found. This page has no structure.")
 
-        # --- SECTION 3: FORENSIC FINDINGS (The "Fix It" Section) ---
+        # --- SECTION 3: FINDINGS ---
         st.markdown("---")
         st.subheader("2. Forensic Issues & Fixes")
         
-        # Group by Severity
         severity_order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
         issues.sort(key=lambda x: severity_order.get(x['Severity'], 4))
         
@@ -300,11 +292,9 @@ if run_btn and url_input:
             st.info("No issues found.")
         
         for i in issues:
-            # Color classes
             border_class = f"audit-{i['Severity'].lower().replace('critical','critical').replace('high','critical').replace('medium','warning')}"
             badge_class = "bg-red" if i['Severity'] in ["Critical", "High"] else "bg-orange" if i['Severity'] == "Medium" else "bg-blue"
             
-            # Render Card
             st.markdown(f"""
             <div class="audit-card {border_class}">
                 <div style="margin-bottom:8px;">
@@ -312,7 +302,7 @@ if run_btn and url_input:
                     <span style="font-weight:600; font-size:1.1rem; margin-left:8px;">{i['Title']}</span>
                 </div>
                 <div style="color:#24292e; margin-bottom:10px;">{i['Desc']}</div>
-                <div style="font-size:0.85rem; color:#57606a; background:#f6f8fa; padding:8px; border-radius:4px;">
+                <div style="font-size:0.85rem; color:#57606a; background:#f6f8fa; padding:10px; border-radius:4px;">
                     <strong>⚡ Recommended Fix:</strong> {i['Fix']}
                 </div>
                  <div style="font-size:0.75rem; color:#0969da; margin-top:5px; text-align:right;">
