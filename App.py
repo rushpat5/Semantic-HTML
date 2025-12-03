@@ -1,244 +1,322 @@
 import streamlit as st
 import pandas as pd
 import re
-import html  # Added for escaping tags
-from bs4 import BeautifulSoup
 import requests
+from bs4 import BeautifulSoup, Comment
+import html
 
 # -----------------------------------------------------------------------------
-# 1. VISUAL CONFIGURATION (Clean Academic Style)
+# 1. VISUAL CONFIGURATION (Academic/Agency Style)
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Semantic HTML Architect", layout="wide", page_icon="🏛️")
+st.set_page_config(page_title="Semantic Architect", layout="wide", page_icon="🏛️")
 
 st.markdown("""
 <style>
-    :root { --primary-color: #1a7f37; --background-color: #ffffff; --secondary-background-color: #f6f8fa; --text-color: #24292e; --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
-    .stApp { background-color: #ffffff; color: #24292e; }
-    h1, h2, h3, h4 { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #111; letter-spacing: -0.3px; }
+    :root { --primary-color: #1a7f37; --background-color: #ffffff; --secondary-background-color: #f6f8fa; --text-color: #24292e; }
+    .stApp { background-color: #ffffff; color: #24292e; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
     
-    /* Section Headers */
-    .category-header {
-        font-size: 1.1rem; font-weight: 700; margin-top: 20px; margin-bottom: 10px;
-        border-bottom: 2px solid #e1e4e8; padding-bottom: 5px;
-    }
-    .cat-seo { color: #d73a49; border-color: #d73a49; }
-    .cat-structure { color: #d29922; border-color: #d29922; }
-    .cat-access { color: #0969da; border-color: #0969da; }
-
-    /* Suggestion Box */
-    .suggestion-box {
-        background: #ffffff; border: 1px solid #e1e4e8; border-radius: 6px;
-        padding: 15px; margin-bottom: 10px; border-left: 4px solid #ccc;
-    }
-    .suggestion-box.Critical { border-left-color: #d73a49; }
-    .suggestion-box.Major { border-left-color: #d29922; }
-    .suggestion-box.Minor { border-left-color: #0969da; }
+    /* Headers */
+    h1, h2, h3 { color: #111; font-weight: 600; letter-spacing: -0.5px; }
     
-    /* Snippet */
-    .code-context {
-        background: #f6f8fa; padding: 10px; border-radius: 4px;
-        font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85rem; color: #24292e;
-        border: 1px solid #d0d7de; margin-top: 8px;
-        white-space: pre-wrap; /* Preserve line breaks */
+    /* Audit Cards */
+    .audit-card {
+        border: 1px solid #e1e4e8; border-radius: 8px; padding: 20px; margin-bottom: 15px;
+        background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.02);
     }
-
+    .audit-critical { border-left: 5px solid #d73a49; }
+    .audit-warning { border-left: 5px solid #d29922; }
+    .audit-info { border-left: 5px solid #0969da; }
+    
+    /* Badges */
+    .badge {
+        display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+    }
+    .bg-red { background: #ffebe9; color: #cf222e; }
+    .bg-orange { background: #fff8c5; color: #9a6700; }
+    .bg-blue { background: #ddf4ff; color: #0969da; }
+    
+    /* Code Blocks in Reports */
+    .code-fix {
+        background: #f6f8fa; padding: 10px; border-radius: 4px; border: 1px solid #d0d7de;
+        font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85rem; margin-top: 10px;
+        white-space: pre-wrap; color: #24292e;
+    }
+    
     /* Sidebar */
     section[data-testid="stSidebar"] { background-color: #f6f8fa; border-right: 1px solid #d0d7de; }
     .stTextArea textarea { background-color: #f6f8fa !important; border: 1px solid #d0d7de !important; }
-    div.stButton > button { background-color: #1a7f37; color: white !important; border: none; }
     
+    /* Tree View */
+    .tree-node { font-family: monospace; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
+    .tree-h1 { font-weight: 700; color: #000; font-size: 1.1rem; }
+    .tree-h2 { font-weight: 600; color: #24292e; margin-left: 20px; }
+    .tree-h3 { color: #586069; margin-left: 40px; }
+    .tree-h4 { color: #6e7781; margin-left: 60px; font-style: italic; }
+    .tree-error { color: #cf222e; font-weight: bold; }
+
     #MainMenu {visibility: hidden;} footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. INTELLIGENT PARSING ENGINE
+# 2. ADVANCED AUDIT ENGINE
 # -----------------------------------------------------------------------------
 
-def fetch_html(url):
-    if not url.startswith("http"): url = "https://" + url
+def fetch_source(url):
+    if not url.startswith('http'): url = 'https://' + url
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Chrome/120.0.0.0)'}
-        response = requests.get(url, headers=headers, timeout=10)
-        return response.text, None
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        r = requests.get(url, headers=headers, timeout=10)
+        r.raise_for_status()
+        return r.text, None
     except Exception as e:
         return None, str(e)
 
-def get_smart_snippet(tag):
-    """
-    Generates a viewable HTML snippet. 
-    """
+def get_tag_preview(tag):
+    """Returns the opening tag as a string (e.g. <div class='header'>)."""
     if not tag: return ""
-    
-    # 1. Build opening tag with attributes
     attrs = " ".join([f'{k}="{v if isinstance(v, str) else " ".join(v)}"' for k,v in tag.attrs.items()])
-    open_tag = f"<{tag.name} {attrs}>" if attrs else f"<{tag.name}>"
-    
-    # 2. Find first text content
-    text_content = " ".join(tag.get_text(separator=" ", strip=True).split())
-    if len(text_content) > 80: text_content = text_content[:80] + "..."
-    
-    if not text_content: text_content = "..."
-    
-    return f"{open_tag}\n  {text_content}\n</{tag.name}>"
+    return f"<{tag.name} {attrs}>"
 
-def analyze_architecture(html):
-    soup = BeautifulSoup(html, 'html.parser')
-    report = {
-        "SEO": [],        # Headings
-        "Structure": [],  # Landmarks
-        "Quality": []     # Code health
+def audit_logic(html_content):
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Remove scripts/styles for text analysis
+    for script in soup(["script", "style", "noscript"]):
+        script.decompose()
+        
+    issues = []
+    score_deductions = 0
+    
+    # --- A. CRITICAL SEO: HEADING OUTLINE ALGORITHM ---
+    headings = soup.find_all(re.compile('^h[1-6]$'))
+    h1s = soup.find_all('h1')
+    
+    # Rule 1: The H1 Existence
+    if len(h1s) == 0:
+        issues.append({
+            "Category": "SEO", "Severity": "Critical",
+            "Title": "Missing H1 Tag",
+            "Desc": "The document has no H1. Search engines use H1 to determine the primary topic.",
+            "Fix": "Add a single <h1> tag wrapping the page title.",
+            "Ref": "Google SEO Starter Guide"
+        })
+        score_deductions += 25
+    elif len(h1s) > 1:
+        issues.append({
+            "Category": "SEO", "Severity": "High",
+            "Title": "Multiple H1 Tags",
+            "Desc": f"Found {len(h1s)} H1 tags. While allowed in HTML5, Bing and older Google algos prefer a single H1.",
+            "Fix": "Convert secondary H1s to H2.",
+            "Ref": "MDN Web Docs"
+        })
+        score_deductions += 10
+
+    # Rule 2: Heading Skippage (The Outline Check)
+    if headings:
+        prev_level = 0
+        for h in headings:
+            curr_level = int(h.name[1])
+            # Logic: You can't jump from H2 to H4. You CAN jump from H4 to H2.
+            if curr_level > prev_level + 1 and prev_level != 0:
+                issues.append({
+                    "Category": "SEO", "Severity": "Medium",
+                    "Title": f"Broken Heading Hierarchy (<h{prev_level}> → <h{curr_level}>)",
+                    "Desc": f"You skipped a heading level. The structure jumps from H{prev_level} directly to H{curr_level}, skipping the levels in between.",
+                    "Fix": f"Change <{h.name}> to <h{prev_level+1}>.",
+                    "Ref": "WCAG 1.3.1 Info and Relationships"
+                })
+                score_deductions += 5
+            prev_level = curr_level
+
+    # --- B. SEMANTIC INFERENCE (Detecting "Fake" Semantics) ---
+    # We look for <div>s that SHOULD be semantic tags based on their Class/ID names
+    
+    semantic_map = {
+        "header": ["header", "top", "banner"],
+        "nav": ["nav", "menu", "navigation", "links"],
+        "footer": ["footer", "bottom", "copyright"],
+        "article": ["post", "article", "content", "entry"],
+        "aside": ["sidebar", "widget", "related"]
     }
     
-    # --- A. THE "ARTICLE" HEURISTIC ---
-    content_candidates = []
-    # Search mostly containers
-    for tag in soup.find_all(['div', 'section', 'article', 'main']):
-        # Count length of direct text
-        text_len = len(tag.get_text(strip=True))
-        content_candidates.append((tag, text_len))
-    
-    # Sort by text length (Dense content first)
-    content_candidates.sort(key=lambda x: x[1], reverse=True)
-    
-    if content_candidates:
-        top_candidate, length = content_candidates[0]
-        # If the biggest text container isn't semantic, flag it
-        if length > 300:
-            if top_candidate.name not in ['article', 'main']:
-                # FIX: Use backticks ` ` to ensure text is visible
-                fix_msg = f"Change this `{top_candidate.name}` tag to an `<article>` or `<main>` tag."
-                
-                report["Structure"].append({
-                    "Issue": "Main Content Container is generic",
-                    "Severity": "Critical",
-                    "Snippet": get_smart_snippet(top_candidate),
-                    "Fix": fix_msg,
-                    "Why": "This element contains the bulk of your text. Defining it semantically helps Google identify the core content piece."
-                })
-    
-    # --- B. HEADING LOGIC ---
-    h1s = soup.find_all('h1')
-    if not h1s:
-        report["SEO"].append({
-            "Issue": "Missing H1 Tag",
-            "Severity": "Critical",
-            "Snippet": "<html>...</html>",
-            "Fix": "Add an `<h1>` tag containing your target keyword/title.",
-            "Why": "The H1 is the single most important on-page SEO signal."
-        })
-    elif len(h1s) > 1:
-        report["SEO"].append({
-            "Issue": "Multiple H1 Tags found",
-            "Severity": "Major",
-            "Snippet": get_smart_snippet(h1s[1]),
-            "Fix": "Convert secondary `<h1>` tags to `<h2>`.",
-            "Why": "Multiple H1s dilute the topical focus of the page."
-        })
+    divs = soup.find_all('div')
+    for div in divs:
+        attrs = str(div.get('class', [])) + str(div.get('id', ''))
+        attrs = attrs.lower()
+        
+        for tag_name, keywords in semantic_map.items():
+            # Check if div has class="main-header" but is just a div
+            if any(k in attrs for k in keywords) and not div.find_parent(tag_name):
+                # Limit reporting to avoid spamming
+                if len([x for x in issues if x['Title'] == f"Generic <div> used for {tag_name}"]) < 2:
+                    issues.append({
+                        "Category": "Semantics", "Severity": "Medium",
+                        "Title": f"Generic <div> used for {tag_name}",
+                        "Desc": f"Found a `<div>` with class/id identifying it as a **{tag_name}**, but it uses a generic tag.",
+                        "Fix": f"Change {get_tag_preview(div)} to <{tag_name}>.",
+                        "Ref": "MDN Semantic Elements"
+                    })
+                    score_deductions += 3
 
-    # Check for "Fake Headings"
-    fake_headings = soup.find_all(lambda tag: tag.name not in ['h1','h2','h3'] and tag.get('class') and any(c in ['h1', 'h2', 'title', 'header-text', 'heading'] for c in tag.get('class')))
-    for fake in fake_headings[:2]:
-        report["SEO"].append({
-            "Issue": "Semantic Mismatch (Fake Heading)",
-            "Severity": "Major",
-            "Snippet": get_smart_snippet(fake),
-            "Fix": f"Change `<{fake.name}>` to an actual `<h*>` tag.",
-            "Why": "You are using CSS to make this look like a heading, but Google sees it as plain text."
-        })
-
-    # --- C. LANDMARKS & NAVIGATION ---
-    if not soup.find('nav'):
-        potential_nav = soup.find('div', class_=re.compile('nav|menu', re.I))
-        if potential_nav:
-             report["Structure"].append({
-                "Issue": "Generic <div> used for Menu",
-                "Severity": "Major",
-                "Snippet": get_smart_snippet(potential_nav),
-                "Fix": "Rename `<div class='...'>` to `<nav class='...'>`.",
-                "Why": "Allows screen readers and bots to jump directly to site navigation."
+    # --- C. LANDMARKS (Accessibility) ---
+    landmarks = ['main', 'nav', 'header', 'footer']
+    for lm in landmarks:
+        if not soup.find(lm):
+            severity = "Critical" if lm == "main" else "Medium"
+            issues.append({
+                "Category": "Accessibility", "Severity": severity,
+                "Title": f"Missing <{lm}> Landmark",
+                "Desc": f"The document lacks a <{lm}> region. Screen readers use this to jump to content.",
+                "Fix": f"Wrap the relevant section in a <{lm}> tag.",
+                "Ref": "WAI-ARIA Landmarks"
             })
+            score_deductions += 10
 
-    # --- D. BUTTON VS LINK ---
-    fake_buttons = soup.find_all(lambda t: t.name in ['div', 'span'] and t.get('class') and 'btn' in t.get('class') and not t.find('a'))
-    for btn in fake_buttons[:2]:
-        report["Quality"].append({
-            "Issue": "Div used as Button",
-            "Severity": "Minor",
-            "Snippet": get_smart_snippet(btn),
-            "Fix": "Change to `<a>` or `<button>`.",
-            "Why": "Non-interactive elements used for interaction break accessibility."
+    # --- D. HYGIENE (Links & Images) ---
+    images = soup.find_all('img')
+    missing_alts = [img for img in images if not img.get('alt')]
+    if missing_alts:
+        issues.append({
+            "Category": "Accessibility", "Severity": "High",
+            "Title": f"{len(missing_alts)} Images missing Alt Text",
+            "Desc": "Images must have an 'alt' attribute for SEO and Screen Readers.",
+            "Fix": "Add `alt='description'` to your <img> tags.",
+            "Ref": "WCAG 1.1.1 Non-text Content"
         })
+        score_deductions += 10
 
-    return report
+    # Calculate Final Score
+    final_score = max(0, 100 - score_deductions)
+    
+    return final_score, issues, headings
 
 # -----------------------------------------------------------------------------
-# 3. MAIN APP UI
+# 3. SIDEBAR
+# -----------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("### ⚙️ Audit Engine")
+    st.markdown("""
+    **Logic:** Heuristic DOM Analysis
+    <div class="tech-note">
+    <b>How it works:</b>
+    This tool parses the HTML Document Object Model (DOM) to verify:
+    1. <b>Hierarchy:</b> Are headings logical?
+    2. <b>Semantics:</b> Are classes like "nav" using <code>&lt;nav&gt;</code>?
+    3. <b>Landmarks:</b> Can bots navigate the regions?
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    st.markdown("### 🛡️ Standards")
+    st.markdown("""
+    *   [Google SEO Starter Guide](https://developers.google.com/search/docs/fundamentals/seo-starter-guide)
+    *   [WCAG 2.1 Accessibility](https://www.w3.org/TR/WCAG21/)
+    *   [HTML5 Specification](https://html.spec.whatwg.org/multipage/)
+    """)
+
+# -----------------------------------------------------------------------------
+# 4. MAIN INTERFACE
 # -----------------------------------------------------------------------------
 
 st.title("Semantic HTML Architect")
-st.markdown("### Structure & SEO Validator")
-
-with st.expander("How this tool thinks (Methodology)", expanded=False):
-    st.markdown("""
-    **Heuristic Analysis:**
-    Instead of just checking if tags exist, this tool looks at the **content volume**. 
-    
-    *   It finds the element with the most text and checks if it's wrapped in an `<article>`.
-    *   It finds elements named "menu" and checks if they are `<nav>`.
-    *   It finds elements styled like "titles" and checks if they are `<h1>`.
-    """)
-
-st.write("")
+st.markdown("### Structural SEO & Accessibility Audit")
 
 # Input
-tab1, tab2 = st.tabs(["🌐 From URL", "📝 From Source Code"])
-html_source = None
+url_input = st.text_input("Enter URL to Audit", placeholder="https://example.com")
+run_btn = st.button("Run Structural Audit", type="primary")
 
-with tab1:
-    url_in = st.text_input("URL", placeholder="https://example.com")
-    if st.button("Audit URL"):
-        with st.spinner("Fetching DOM..."):
-            raw, err = fetch_html(url_in)
-            if err: st.error(err)
-            else: html_source = raw
-
-with tab2:
-    raw_in = st.text_area("HTML Code", height=200)
-    if st.button("Audit Code"):
-        html_source = raw_in
-
-# Results
-if html_source:
-    report = analyze_architecture(html_source)
+if run_btn and url_input:
     
-    st.markdown("---")
+    with st.spinner("Fetching source code & building DOM tree..."):
+        html_content, error = fetch_source(url_input)
     
-    # Helper to display section
-    def render_section(title, class_name, items):
-        st.markdown(f"<div class='category-header {class_name}'>{title}</div>", unsafe_allow_html=True)
-        if not items:
-            st.success("✅ Optimized.")
-            return
-
-        for item in items:
-            # ESCAPE HTML IN SNIPPET SO IT SHOWS AS CODE
-            safe_snippet = html.escape(item['Snippet'])
-            
+    if error:
+        st.error(f"Failed to fetch URL: {error}")
+    else:
+        # Run Analysis
+        score, issues, headings_list = audit_logic(html_content)
+        
+        # --- SECTION 1: EXECUTIVE SUMMARY ---
+        st.markdown("---")
+        c1, c2 = st.columns([1, 3])
+        
+        with c1:
+            # Score Gauge
+            color = "#1a7f37" if score >= 90 else "#d29922" if score >= 60 else "#d73a49"
             st.markdown(f"""
-            <div class="suggestion-box {item['Severity']}">
-                <strong>{item['Issue']}</strong>
-                <div style="margin-top:5px; color:#555;">{item['Fix']}</div>
-                <div class="code-context">{safe_snippet}</div>
-                <div style="font-size:0.8rem; color:#777; margin-top:5px;"><em>Why: {item['Why']}</em></div>
+            <div style="text-align:center; border:2px solid {color}; border-radius:10px; padding:20px;">
+                <div style="font-size:3rem; font-weight:bold; color:{color}">{score}</div>
+                <div style="font-size:0.8rem; text-transform:uppercase; color:#666;">Semantic Score</div>
             </div>
             """, unsafe_allow_html=True)
+            
+        with c2:
+            st.markdown("### 📊 Audit Summary")
+            if score == 100:
+                st.success("Perfect Score! Your HTML structure is semantic, accessible, and optimized for search engines.")
+            else:
+                st.markdown(f"We found **{len(issues)} architectural issues** that may confuse search engines or block screen readers. Prioritize **Critical** errors immediately.")
 
-    # 1. SEO Critical
-    render_section("1. Critical SEO Signals", "cat-seo", report["SEO"])
+        # --- SECTION 2: VISUAL DOCUMENT OUTLINE (The "Hierarchy" Check) ---
+        st.markdown("---")
+        st.subheader("1. Heading Hierarchy Visualizer")
+        st.markdown("This is how Google bots 'read' your content outline. Look for broken indentation.")
+        
+        if headings_list:
+            tree_html = "<div style='background:#fff; padding:15px; border:1px solid #e1e4e8; border-radius:6px; max-height:300px; overflow-y:auto;'>"
+            prev_lvl = 0
+            
+            for h in headings_list:
+                lvl = int(h.name[1])
+                text = h.get_text(strip=True)[:60]
+                
+                # Styling based on level
+                style_class = f"tree-{h.name}"
+                indent = "&nbsp;" * ((lvl - 1) * 4)
+                
+                # Logic Check
+                error_marker = ""
+                if lvl > prev_level + 1 and prev_lvl != 0:
+                     error_marker = " <span class='tree-error'>[⚠ SKIPPED LEVEL]</span>"
+                
+                tree_html += f"<div class='tree-node'>{indent}<span class='{style_class}'>&lt;{h.name}&gt;</span> {text}{error_marker}</div>"
+                prev_level = lvl
+                
+            tree_html += "</div>"
+            st.markdown(tree_html, unsafe_allow_html=True)
+        else:
+            st.warning("No headings (H1-H6) found. This page has no structure.")
 
-    # 2. Structural
-    render_section("2. Structural Landmarks (Architecture)", "cat-structure", report["Structure"])
-
-    # 3. Code Quality
-    render_section("3. Code Quality & Accessibility", "cat-access", report["Quality"])
+        # --- SECTION 3: FORENSIC FINDINGS (The "Fix It" Section) ---
+        st.markdown("---")
+        st.subheader("2. Forensic Issues & Fixes")
+        
+        # Group by Severity
+        severity_order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+        issues.sort(key=lambda x: severity_order.get(x['Severity'], 4))
+        
+        if not issues:
+            st.info("No issues found.")
+        
+        for i in issues:
+            # Color classes
+            border_class = f"audit-{i['Severity'].lower().replace('critical','critical').replace('high','critical').replace('medium','warning')}"
+            badge_class = "bg-red" if i['Severity'] in ["Critical", "High"] else "bg-orange" if i['Severity'] == "Medium" else "bg-blue"
+            
+            # Render Card
+            st.markdown(f"""
+            <div class="audit-card {border_class}">
+                <div style="margin-bottom:8px;">
+                    <span class="badge {badge_class}">{i['Severity']}</span>
+                    <span style="font-weight:600; font-size:1.1rem; margin-left:8px;">{i['Title']}</span>
+                </div>
+                <div style="color:#24292e; margin-bottom:10px;">{i['Desc']}</div>
+                <div style="font-size:0.85rem; color:#57606a; background:#f6f8fa; padding:8px; border-radius:4px;">
+                    <strong>⚡ Recommended Fix:</strong> {i['Fix']}
+                </div>
+                 <div style="font-size:0.75rem; color:#0969da; margin-top:5px; text-align:right;">
+                    Standard Reference: {i['Ref']}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
