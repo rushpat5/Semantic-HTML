@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import re
-from bs4 import BeautifulSoup, NavigableString
+import html  # Added for escaping tags
+from bs4 import BeautifulSoup
 import requests
 
 # -----------------------------------------------------------------------------
@@ -35,10 +36,10 @@ st.markdown("""
     
     /* Snippet */
     .code-context {
-        background: #f6f8fa; padding: 8px; border-radius: 4px;
-        font-family: monospace; font-size: 0.85rem; color: #24292e;
+        background: #f6f8fa; padding: 10px; border-radius: 4px;
+        font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85rem; color: #24292e;
         border: 1px solid #d0d7de; margin-top: 8px;
-        white-space: pre-wrap;
+        white-space: pre-wrap; /* Preserve line breaks */
     }
 
     /* Sidebar */
@@ -65,8 +66,7 @@ def fetch_html(url):
 
 def get_smart_snippet(tag):
     """
-    Generates a snippet that includes the tag AND a preview of its text content
-    so the user knows WHICH div this is.
+    Generates a viewable HTML snippet. 
     """
     if not tag: return ""
     
@@ -74,49 +74,47 @@ def get_smart_snippet(tag):
     attrs = " ".join([f'{k}="{v if isinstance(v, str) else " ".join(v)}"' for k,v in tag.attrs.items()])
     open_tag = f"<{tag.name} {attrs}>" if attrs else f"<{tag.name}>"
     
-    # 2. Find first text content (ignoring scripts/styles)
-    text_content = ""
-    for string in tag.stripped_strings:
-        text_content = string
-        break # Just get the first piece of text
+    # 2. Find first text content
+    text_content = " ".join(tag.get_text(separator=" ", strip=True).split())
+    if len(text_content) > 80: text_content = text_content[:80] + "..."
     
-    if len(text_content) > 60: text_content = text_content[:60] + "..."
+    if not text_content: text_content = "..."
     
-    # 3. Combine
-    return f"{open_tag}\n  {text_content}\n..."
+    return f"{open_tag}\n  {text_content}\n</{tag.name}>"
 
 def analyze_architecture(html):
     soup = BeautifulSoup(html, 'html.parser')
     report = {
-        "SEO": [],        # Critical for rankings (Headings, Title)
-        "Structure": [],  # Critical for machine understanding (Landmarks)
-        "Quality": []     # Code health (Divitis, Buttons)
+        "SEO": [],        # Headings
+        "Structure": [],  # Landmarks
+        "Quality": []     # Code health
     }
     
-    # --- A. THE "ARTICLE" HEURISTIC (Intelligent Detection) ---
-    # Find the element with the most paragraph text. That IS the article.
-    # If it's not an <article> tag, flag it.
-    
+    # --- A. THE "ARTICLE" HEURISTIC ---
     content_candidates = []
+    # Search mostly containers
     for tag in soup.find_all(['div', 'section', 'article', 'main']):
-        # Count length of direct text inside p tags
-        p_text_len = sum([len(p.get_text()) for p in tag.find_all('p', recursive=False)])
-        content_candidates.append((tag, p_text_len))
+        # Count length of direct text
+        text_len = len(tag.get_text(strip=True))
+        content_candidates.append((tag, text_len))
     
-    # Sort by text length
+    # Sort by text length (Dense content first)
     content_candidates.sort(key=lambda x: x[1], reverse=True)
     
     if content_candidates:
         top_candidate, length = content_candidates[0]
-        # Only flag if it has substantial content (e.g. > 500 chars)
-        if length > 500:
+        # If the biggest text container isn't semantic, flag it
+        if length > 300:
             if top_candidate.name not in ['article', 'main']:
+                # FIX: Use backticks ` ` to ensure text is visible
+                fix_msg = f"Change this `{top_candidate.name}` tag to an `<article>` or `<main>` tag."
+                
                 report["Structure"].append({
                     "Issue": "Main Content Container is generic",
                     "Severity": "Critical",
                     "Snippet": get_smart_snippet(top_candidate),
-                    "Fix": f"Change this <{top_candidate.name}> to an <article> or <main> tag.",
-                    "Why": "This element contains the bulk of your text. Wrapping it in <article> tells Google 'This is the blog post/content piece'."
+                    "Fix": fix_msg,
+                    "Why": "This element contains the bulk of your text. Defining it semantically helps Google identify the core content piece."
                 })
     
     # --- B. HEADING LOGIC ---
@@ -125,8 +123,8 @@ def analyze_architecture(html):
         report["SEO"].append({
             "Issue": "Missing H1 Tag",
             "Severity": "Critical",
-            "Snippet": "-",
-            "Fix": "Add an <h1> tag containing your target keyword/title.",
+            "Snippet": "<html>...</html>",
+            "Fix": "Add an `<h1>` tag containing your target keyword/title.",
             "Why": "The H1 is the single most important on-page SEO signal."
         })
     elif len(h1s) > 1:
@@ -134,52 +132,41 @@ def analyze_architecture(html):
             "Issue": "Multiple H1 Tags found",
             "Severity": "Major",
             "Snippet": get_smart_snippet(h1s[1]),
-            "Fix": "Convert secondary H1s to H2.",
-            "Why": "Multiple H1s confuse search engines about the primary topic."
+            "Fix": "Convert secondary `<h1>` tags to `<h2>`.",
+            "Why": "Multiple H1s dilute the topical focus of the page."
         })
 
-    # Check for "Fake Headings" (Divs styled as headings)
-    # Look for classes like "h1", "title", "heading" on non-heading tags
-    fake_headings = soup.find_all(lambda tag: tag.name not in ['h1','h2','h3','h4','h5','h6'] and tag.get('class') and any(c in ['h1', 'h2', 'title', 'header-text'] for c in tag.get('class')))
-    for fake in fake_headings[:3]: # Limit to 3
+    # Check for "Fake Headings"
+    fake_headings = soup.find_all(lambda tag: tag.name not in ['h1','h2','h3'] and tag.get('class') and any(c in ['h1', 'h2', 'title', 'header-text', 'heading'] for c in tag.get('class')))
+    for fake in fake_headings[:2]:
         report["SEO"].append({
             "Issue": "Semantic Mismatch (Fake Heading)",
             "Severity": "Major",
             "Snippet": get_smart_snippet(fake),
-            "Fix": f"Change <{fake.name}> to <h*> tag.",
+            "Fix": f"Change `<{fake.name}>` to an actual `<h*>` tag.",
             "Why": "You are using CSS to make this look like a heading, but Google sees it as plain text."
         })
 
     # --- C. LANDMARKS & NAVIGATION ---
     if not soup.find('nav'):
-        # Look for a div that acts like a nav
         potential_nav = soup.find('div', class_=re.compile('nav|menu', re.I))
         if potential_nav:
              report["Structure"].append({
                 "Issue": "Generic <div> used for Menu",
                 "Severity": "Major",
                 "Snippet": get_smart_snippet(potential_nav),
-                "Fix": "Rename <div class='...'> to <nav class='...'>.",
+                "Fix": "Rename `<div class='...'>` to `<nav class='...'>`.",
                 "Why": "Allows screen readers and bots to jump directly to site navigation."
-            })
-        else:
-            report["Structure"].append({
-                "Issue": "No Navigation Landmark",
-                "Severity": "Minor",
-                "Snippet": "-",
-                "Fix": "Wrap your links in a <nav> tag.",
-                "Why": "Site structure is unclear to machines."
             })
 
     # --- D. BUTTON VS LINK ---
-    # Finding "Read More" buttons that are actually divs or spans
     fake_buttons = soup.find_all(lambda t: t.name in ['div', 'span'] and t.get('class') and 'btn' in t.get('class') and not t.find('a'))
     for btn in fake_buttons[:2]:
         report["Quality"].append({
             "Issue": "Div used as Button",
             "Severity": "Minor",
             "Snippet": get_smart_snippet(btn),
-            "Fix": "Change to <a href='...'> or <button>.",
+            "Fix": "Change to `<a>` or `<button>`.",
             "Why": "Non-interactive elements used for interaction break accessibility."
         })
 
@@ -200,8 +187,6 @@ with st.expander("How this tool thinks (Methodology)", expanded=False):
     *   It finds the element with the most text and checks if it's wrapped in an `<article>`.
     *   It finds elements named "menu" and checks if they are `<nav>`.
     *   It finds elements styled like "titles" and checks if they are `<h1>`.
-    
-    This mimics how a Human SEO Consultant audits code.
     """)
 
 st.write("")
@@ -229,47 +214,31 @@ if html_source:
     
     st.markdown("---")
     
-    # 1. SEO Critical
-    st.markdown(f"<div class='category-header cat-seo'>1. Critical SEO Signals</div>", unsafe_allow_html=True)
-    if not report["SEO"]:
-        st.success("✅ Headings and Text Signals are optimized.")
-    else:
-        for item in report["SEO"]:
+    # Helper to display section
+    def render_section(title, class_name, items):
+        st.markdown(f"<div class='category-header {class_name}'>{title}</div>", unsafe_allow_html=True)
+        if not items:
+            st.success("✅ Optimized.")
+            return
+
+        for item in items:
+            # ESCAPE HTML IN SNIPPET SO IT SHOWS AS CODE
+            safe_snippet = html.escape(item['Snippet'])
+            
             st.markdown(f"""
             <div class="suggestion-box {item['Severity']}">
                 <strong>{item['Issue']}</strong>
                 <div style="margin-top:5px; color:#555;">{item['Fix']}</div>
-                <div class="code-context">{item['Snippet']}</div>
+                <div class="code-context">{safe_snippet}</div>
                 <div style="font-size:0.8rem; color:#777; margin-top:5px;"><em>Why: {item['Why']}</em></div>
             </div>
             """, unsafe_allow_html=True)
+
+    # 1. SEO Critical
+    render_section("1. Critical SEO Signals", "cat-seo", report["SEO"])
 
     # 2. Structural
-    st.markdown(f"<div class='category-header cat-structure'>2. Structural Landmarks (Architecture)</div>", unsafe_allow_html=True)
-    if not report["Structure"]:
-        st.success("✅ Landmarks (<nav>, <main>, <article>) are correctly defined.")
-    else:
-        for item in report["Structure"]:
-            st.markdown(f"""
-            <div class="suggestion-box {item['Severity']}">
-                <strong>{item['Issue']}</strong>
-                <div style="margin-top:5px; color:#555;">{item['Fix']}</div>
-                <div class="code-context">{item['Snippet']}</div>
-                <div style="font-size:0.8rem; color:#777; margin-top:5px;"><em>Why: {item['Why']}</em></div>
-            </div>
-            """, unsafe_allow_html=True)
+    render_section("2. Structural Landmarks (Architecture)", "cat-structure", report["Structure"])
 
     # 3. Code Quality
-    st.markdown(f"<div class='category-header cat-access'>3. Code Quality & Accessibility</div>", unsafe_allow_html=True)
-    if not report["Quality"]:
-        st.success("✅ Code semantic quality is high.")
-    else:
-        for item in report["Quality"]:
-            st.markdown(f"""
-            <div class="suggestion-box {item['Severity']}">
-                <strong>{item['Issue']}</strong>
-                <div style="margin-top:5px; color:#555;">{item['Fix']}</div>
-                <div class="code-context">{item['Snippet']}</div>
-                <div style="font-size:0.8rem; color:#777; margin-top:5px;"><em>Why: {item['Why']}</em></div>
-            </div>
-            """, unsafe_allow_html=True)
+    render_section("3. Code Quality & Accessibility", "cat-access", report["Quality"])
