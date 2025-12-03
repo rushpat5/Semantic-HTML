@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup, Comment
 import html
 
 # -----------------------------------------------------------------------------
-# 1. VISUAL CONFIGURATION (Academic/Agency Style)
+# 1. VISUAL CONFIGURATION (Strict Dejan Style)
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="Semantic Architect", layout="wide", page_icon="🏛️")
 
@@ -34,13 +34,6 @@ st.markdown("""
     .bg-red { background: #ffebe9; color: #cf222e; }
     .bg-orange { background: #fff8c5; color: #9a6700; }
     .bg-blue { background: #ddf4ff; color: #0969da; }
-    
-    /* Code Blocks in Reports */
-    .code-fix {
-        background: #f6f8fa; padding: 10px; border-radius: 4px; border: 1px solid #d0d7de;
-        font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.85rem; margin-top: 10px;
-        white-space: pre-wrap; color: #24292e;
-    }
     
     /* Sidebar */
     section[data-testid="stSidebar"] { background-color: #f6f8fa; border-right: 1px solid #d0d7de; }
@@ -73,11 +66,19 @@ def fetch_source(url):
         return None, str(e)
 
 def get_tag_preview(tag):
-    """Returns the opening tag as a string (e.g. <div class='header'>)."""
+    """Returns the opening tag as a string, truncated."""
     if not tag: return ""
-    attrs = " ".join([f'{k}="{v if isinstance(v, str) else " ".join(v)}"' for k,v in tag.attrs.items()])
-    # Escape HTML characters so they show up in the UI
-    return html.escape(f"<{tag.name} {attrs}>")
+    # Reconstruct attributes
+    attrs = []
+    for k, v in tag.attrs.items():
+        if isinstance(v, list): v = " ".join(v)
+        attrs.append(f'{k}="{v}"')
+    
+    attr_str = " ".join(attrs)
+    # Limit length of preview
+    if len(attr_str) > 60: attr_str = attr_str[:60] + "..."
+    
+    return f"<{tag.name} {attr_str}>"
 
 def audit_logic(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -93,13 +94,12 @@ def audit_logic(html_content):
     headings = soup.find_all(re.compile('^h[1-6]$'))
     h1s = soup.find_all('h1')
     
-    # Rule 1: The H1 Existence
     if len(h1s) == 0:
         issues.append({
             "Category": "SEO", "Severity": "Critical",
             "Title": "Missing H1 Tag",
             "Desc": "The document has no H1. Search engines use H1 to determine the primary topic.",
-            "Fix": "Add a single <h1> tag wrapping the page title.",
+            "Fix": "Add a single `<h1>` tag wrapping the page title.",
             "Ref": "Google SEO Starter Guide"
         })
         score_deductions += 25
@@ -107,35 +107,33 @@ def audit_logic(html_content):
         issues.append({
             "Category": "SEO", "Severity": "High",
             "Title": "Multiple H1 Tags",
-            "Desc": f"Found {len(h1s)} H1 tags. While allowed in HTML5, Bing and older Google algos prefer a single H1.",
-            "Fix": "Convert secondary H1s to H2.",
+            "Desc": f"Found {len(h1s)} H1 tags. While allowed, best practice is one H1 per page.",
+            "Fix": "Convert secondary `<h1>` tags to `<h2>`.",
             "Ref": "MDN Web Docs"
         })
         score_deductions += 10
 
-    # Rule 2: Heading Skippage (The Outline Check)
     if headings:
         prev_level = 0
         for h in headings:
             curr_level = int(h.name[1])
-            # Logic: You can't jump from H2 to H4. You CAN jump from H4 to H2.
             if curr_level > prev_level + 1 and prev_level != 0:
                 issues.append({
                     "Category": "SEO", "Severity": "Medium",
                     "Title": f"Broken Heading Hierarchy (<h{prev_level}> → <h{curr_level}>)",
-                    "Desc": f"You skipped a heading level. The structure jumps from H{prev_level} directly to H{curr_level}, skipping the levels in between.",
-                    "Fix": f"Change <{h.name}> to <h{prev_level+1}>.",
-                    "Ref": "WCAG 1.3.1 Info and Relationships"
+                    "Desc": f"Structure jumps from H{prev_level} directly to H{curr_level}.",
+                    "Fix": f"Change `<{h.name}>` to `<h{prev_level+1}>`.",
+                    "Ref": "WCAG 1.3.1"
                 })
                 score_deductions += 5
             prev_level = curr_level
 
     # --- B. SEMANTIC INFERENCE (Detecting "Fake" Semantics) ---
     semantic_map = {
-        "header": ["header", "top", "banner"],
-        "nav": ["nav", "menu", "navigation", "links"],
+        "header": ["header", "top-bar", "banner"],
+        "nav": ["nav", "menu", "navigation"],
         "footer": ["footer", "bottom", "copyright"],
-        "article": ["post", "article", "content", "entry"],
+        "article": ["post", "article", "content-body", "entry"],
         "aside": ["sidebar", "widget", "related"]
     }
     
@@ -145,19 +143,25 @@ def audit_logic(html_content):
         attrs = attrs.lower()
         
         for tag_name, keywords in semantic_map.items():
-            if any(k in attrs for k in keywords) and not div.find_parent(tag_name):
-                # Check if we already flagged this type to avoid spam
+            if any(k in attrs for k in keywords):
+                # CRITICAL FIX: Ignore if it's already inside the correct tag
+                # e.g. <header><div class="header-inner"> is fine.
+                if div.find_parent(tag_name):
+                    continue
+                
+                # Avoid duplicate flags
                 if len([x for x in issues if x['Title'] == f"Generic <div> used for {tag_name}"]) < 1:
+                    preview = html.escape(get_tag_preview(div))
                     issues.append({
                         "Category": "Semantics", "Severity": "Medium",
                         "Title": f"Generic <div> used for {tag_name}",
                         "Desc": f"Found a `<div>` with class/id identifying it as a **{tag_name}**, but it uses a generic tag.",
-                        "Fix": f"Change {get_tag_preview(div)} to <{tag_name}>.",
+                        "Fix": f"Change `{preview}` to `<{tag_name}>`.",
                         "Ref": "MDN Semantic Elements"
                     })
                     score_deductions += 3
 
-    # --- C. LANDMARKS (Accessibility) ---
+    # --- C. LANDMARKS ---
     landmarks = ['main', 'nav', 'header', 'footer']
     for lm in landmarks:
         if not soup.find(lm):
@@ -165,13 +169,13 @@ def audit_logic(html_content):
             issues.append({
                 "Category": "Accessibility", "Severity": severity,
                 "Title": f"Missing <{lm}> Landmark",
-                "Desc": f"The document lacks a <{lm}> region. Screen readers use this to jump to content.",
-                "Fix": f"Wrap the relevant section in a <{lm}> tag.",
+                "Desc": f"The document lacks a `<{lm}>` region.",
+                "Fix": f"Wrap the relevant section in a `<{lm}>` tag.",
                 "Ref": "WAI-ARIA Landmarks"
             })
             score_deductions += 10
 
-    # --- D. HYGIENE (Links & Images) ---
+    # --- D. HYGIENE ---
     images = soup.find_all('img')
     missing_alts = [img for img in images if not img.get('alt')]
     if missing_alts:
@@ -179,8 +183,8 @@ def audit_logic(html_content):
             "Category": "Accessibility", "Severity": "High",
             "Title": f"{len(missing_alts)} Images missing Alt Text",
             "Desc": "Images must have an 'alt' attribute for SEO and Screen Readers.",
-            "Fix": "Add `alt='description'` to your <img> tags.",
-            "Ref": "WCAG 1.1.1 Non-text Content"
+            "Fix": "Add `alt='description'` to your `<img>` tags.",
+            "Ref": "WCAG 1.1.1"
         })
         score_deductions += 10
 
@@ -195,7 +199,7 @@ with st.sidebar:
     st.markdown("### ⚙️ Audit Engine")
     st.markdown("""
     **Logic:** Heuristic DOM Analysis
-    <div class="tech-note">
+    <div style="font-size:0.85rem; color:#586069; background:#f6f8fa; padding:10px; border-left:3px solid #1a7f37;">
     <b>How it works:</b>
     This tool parses the HTML Document Object Model (DOM) to verify:
     1. <b>Hierarchy:</b> Are headings logical?
@@ -232,7 +236,7 @@ if run_btn and url_input:
     else:
         score, issues, headings_list = audit_logic(html_content)
         
-        # --- SECTION 1: SCORE ---
+        # --- SECTION 1: EXECUTIVE SUMMARY ---
         st.markdown("---")
         c1, c2 = st.columns([1, 3])
         
@@ -252,29 +256,29 @@ if run_btn and url_input:
             else:
                 st.markdown(f"We found **{len(issues)} architectural issues**. Prioritize **Critical** errors immediately.")
 
-        # --- SECTION 2: HEADING TREE (FIXED) ---
+        # --- SECTION 2: HEADING TREE ---
         st.markdown("---")
         st.subheader("1. Heading Hierarchy Visualizer")
         st.markdown("This is how Google bots 'read' your content outline. Look for broken indentation.")
         
         if headings_list:
             tree_html = "<div style='background:#fff; padding:15px; border:1px solid #e1e4e8; border-radius:6px; max-height:400px; overflow-y:auto;'>"
-            prev_level = 0  # Fixed variable name
+            prev_level = 0 
             
             for h in headings_list:
                 lvl = int(h.name[1])
-                text = h.get_text(strip=True)[:60]
+                # Escape HTML in the text to prevent rendering issues
+                text = html.escape(h.get_text(strip=True)[:60])
                 
                 style_class = f"tree-{h.name}"
                 indent = "&nbsp;" * ((lvl - 1) * 4)
                 
                 error_marker = ""
-                # Logic check: Skipping levels (e.g. H2 -> H4)
                 if lvl > prev_level + 1 and prev_level != 0:
                      error_marker = " <span class='tree-error'>[⚠ SKIPPED LEVEL]</span>"
                 
                 tree_html += f"<div class='tree-node'>{indent}<span class='{style_class}'>&lt;{h.name}&gt;</span> {text}{error_marker}</div>"
-                prev_level = lvl # Update tracker
+                prev_level = lvl
                 
             tree_html += "</div>"
             st.markdown(tree_html, unsafe_allow_html=True)
