@@ -180,7 +180,7 @@ def analyze_html(html_content):
     # Calculate Score
     final_score = max(0, 100 - score_deductions)
     
-    # Structure Map
+    # Structure Map (Fixed Logic)
     structure_map = []
     # Only show headings and major landmarks to keep tree clean
     for tag in soup.find_all(['h1', 'h2', 'h3', 'h4', 'main', 'header', 'footer', 'nav', 'article']):
@@ -189,13 +189,17 @@ def analyze_html(html_content):
         if len(tag.get_text(strip=True)) > 40: text += "..."
         
         indent = 0
-        if tag.name.startswith('h'): indent = int(tag.name[1])
+        # FIX: Explicitly check if it's a heading tag before getting indent
+        is_heading = tag.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']
+        
+        if is_heading:
+            indent = int(tag.name[1])
         
         structure_map.append({
             "Tag": f"<{tag.name}>", 
             "Content": text, 
             "Indent": indent,
-            "Type": "Heading" if tag.name.startswith('h') else "Landmark"
+            "Type": "Heading" if is_heading else "Landmark"
         })
 
     return final_score, pd.DataFrame(findings), pd.DataFrame(structure_map), semantic_ratio
