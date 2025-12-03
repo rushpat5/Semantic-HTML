@@ -40,6 +40,7 @@ st.markdown("""
         font-size: 0.85rem;
         margin: 5px 0;
         overflow-x: auto;
+        white-space: pre-wrap; /* Wrap long code lines */
     }
     
     /* Line Number Badge */
@@ -74,7 +75,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. LOGIC ENGINE (Now with Line Detection)
+# 2. LOGIC ENGINE (Reconstructed Snippets)
 # -----------------------------------------------------------------------------
 
 def fetch_html(url):
@@ -87,23 +88,49 @@ def fetch_html(url):
     except Exception as e:
         return None, str(e)
 
-def get_line_number(tag):
-    """Returns the line number of a tag if available via lxml."""
-    return getattr(tag, 'sourceline', 'Unknown')
+def get_location(tag, index_map):
+    """
+    Gets line number if available, otherwise gets the Nth occurrence.
+    """
+    line = getattr(tag, 'sourceline', None)
+    if line:
+        return f"Line {line}"
+    
+    # Fallback: Calculate occurrence
+    tag_name = tag.name
+    if tag_name not in index_map: index_map[tag_name] = 0
+    index_map[tag_name] += 1
+    return f"Occurrence #{index_map[tag_name]}"
 
-def generate_snippet(tag):
-    """Converts a tag object back to string for display."""
-    return str(tag).split('\n')[0][:150] + "..." # First line only, truncated
+def generate_smart_snippet(tag):
+    """
+    Reconstructs the opening tag with attributes so the user can find it (Ctrl+F).
+    Avoids printing innerHTML which might be huge.
+    """
+    try:
+        # Get attributes (class, id, etc.)
+        attrs = []
+        for k, v in tag.attrs.items():
+            if isinstance(v, list): v = " ".join(v) # Handle class lists
+            attrs.append(f'{k}="{v}"')
+        
+        attr_str = " " + " ".join(attrs) if attrs else ""
+        
+        # Reconstruct: <div class="foo">...</div>
+        return f"<{tag.name}{attr_str}>...</{tag.name}>"
+    except:
+        return str(tag)[:100]
 
 def analyze_html(html_content):
-    # Use 'lxml' for line number tracking (sourceline)
+    # Try to use lxml for line numbers, fallback gracefully
     try:
         soup = BeautifulSoup(html_content, 'lxml')
     except:
-        soup = BeautifulSoup(html_content, 'html.parser') # Fallback
+        soup = BeautifulSoup(html_content, 'html.parser')
         
     findings = []
     score_deductions = 0
+    index_map = {} # To track Nth occurrence if lines fail
     
     # --- 1. SPECIFIC TAG ANALYSIS ---
     
@@ -111,13 +138,13 @@ def analyze_html(html_content):
     images = soup.find_all('img')
     for img in images:
         if not img.get('alt'):
-            line = get_line_number(img)
+            loc = get_location(img, index_map)
             findings.append({
                 "Category": "Accessibility",
                 "Severity": "High",
                 "Issue": "Image missing alt text",
-                "Line": line,
-                "Snippet": generate_snippet(img),
+                "Location": loc,
+                "Snippet": generate_smart_snippet(img),
                 "Fix": 'Add alt="Description of image"'
             })
             score_deductions += 5
@@ -126,13 +153,13 @@ def analyze_html(html_content):
     h1s = soup.find_all('h1')
     if len(h1s) > 1:
         for h1 in h1s[1:]: # Skip the first one
-            line = get_line_number(h1)
+            loc = get_location(h1, index_map)
             findings.append({
                 "Category": "Headings",
                 "Severity": "Medium",
                 "Issue": "Duplicate H1 Tag",
-                "Line": line,
-                "Snippet": generate_snippet(h1),
+                "Location": loc,
+                "Snippet": generate_smart_snippet(h1),
                 "Fix": "Change to <h2> or <div>"
             })
             score_deductions += 5
@@ -141,41 +168,38 @@ def analyze_html(html_content):
                 "Category": "Headings",
                 "Severity": "High",
                 "Issue": "No H1 Found",
-                "Line": "-",
-                "Snippet": "Global",
+                "Location": "Global",
+                "Snippet": "<html>",
                 "Fix": "Add <h1 >Page Title</h1>"
             })
          score_deductions += 20
 
     # C. Navigation Divs (Fake Navs)
-    # Find divs that look like navs but aren't <nav>
     potential_navs = soup.find_all('div', class_=re.compile(r'nav|menu|header', re.I))
     for div in potential_navs:
-        # Heuristic: If it contains list items or links
         if div.find('ul') or len(div.find_all('a')) > 2:
-            line = get_line_number(div)
+            loc = get_location(div, index_map)
             findings.append({
                 "Category": "Structure",
                 "Severity": "Medium",
                 "Issue": "Generic <div> used for Navigation",
-                "Line": line,
-                "Snippet": generate_snippet(div),
+                "Location": loc,
+                "Snippet": generate_smart_snippet(div),
                 "Fix": "Rename <div> to <nav>"
             })
             score_deductions += 5
 
     # D. Button vs Links
-    # Find links with no href or javascript:void
     bad_links = soup.find_all('a', href=re.compile(r'^#$|^javascript:', re.I))
     for a in bad_links:
-        line = get_line_number(a)
+        loc = get_location(a, index_map)
         findings.append({
             "Category": "Code Quality",
             "Severity": "Low",
             "Issue": "Anchor tag used as Button",
-            "Line": line,
-            "Snippet": generate_snippet(a),
-            "Fix": "Use <button> for actions, <a> for navigation"
+            "Location": loc,
+            "Snippet": generate_smart_snippet(a),
+            "Fix": "Use <button> for actions"
         })
         score_deductions += 3
 
@@ -187,7 +211,7 @@ def analyze_html(html_content):
                 "Category": "Structure",
                 "Severity": "High",
                 "Issue": f"Missing <{lm}> landmark",
-                "Line": "Global",
+                "Location": "Global",
                 "Snippet": "-",
                 "Fix": f"Wrap content in <{lm}>"
             })
@@ -198,18 +222,27 @@ def analyze_html(html_content):
     if headings:
         current = int(headings[0].name[1])
         if current != 1:
-             findings.append({"Category": "Headings", "Severity": "Medium", "Issue": f"Incorrect Start: Page starts with <h{current}>", "Line": get_line_number(headings[0]), "Snippet": generate_snippet(headings[0]), "Fix": "Start with <h1>"})
+             loc = get_location(headings[0], index_map)
+             findings.append({
+                 "Category": "Headings", 
+                 "Severity": "Medium", 
+                 "Issue": f"Incorrect Start: Page starts with <h{current}>", 
+                 "Location": loc, 
+                 "Snippet": generate_smart_snippet(headings[0]), 
+                 "Fix": "Start with <h1>"
+             })
              score_deductions += 5
              
         for h in headings:
             lvl = int(h.name[1])
             if lvl > current + 1:
+                 loc = get_location(h, index_map)
                  findings.append({
                     "Category": "Headings",
                     "Severity": "Medium",
                     "Issue": f"Skipped Level (<h{current}> → <h{lvl}>)", 
-                    "Line": get_line_number(h), 
-                    "Snippet": generate_snippet(h),
+                    "Location": loc, 
+                    "Snippet": generate_smart_snippet(h),
                     "Fix": f"Use <h{current+1}>"
                 })
             current = lvl
@@ -221,11 +254,15 @@ def analyze_html(html_content):
     for tag in soup.find_all(['h1', 'h2', 'h3', 'main', 'nav', 'article']):
         indent = 0
         if tag.name.startswith('h'): indent = int(tag.name[1])
+        
+        # Get line number for map
+        l_num = getattr(tag, 'sourceline', '?')
+        
         structure_map.append({
             "Tag": tag.name, 
             "Content": tag.get_text(strip=True)[:50], 
             "Indent": indent,
-            "Line": get_line_number(tag)
+            "Line": l_num
         })
 
     return final_score, pd.DataFrame(findings), structure_map
@@ -236,9 +273,9 @@ def analyze_html(html_content):
 with st.sidebar:
     st.markdown("### ⚙️ Audit Config")
     st.markdown("""
-    **Parser:** `lxml` (Line-Aware)
+    **Parser:** `lxml` + Fallback
     <div class="tech-note">
-    <b>Forensic Mode:</b> This tool locates the exact line number of semantic violations so your dev team can copy-paste fixes.
+    <b>Forensic Mode:</b> This tool reconstructs the exact HTML tags (including classes/IDs) so you can find them in your source code even if line numbers are lost (e.g. minified code).
     </div>
     """, unsafe_allow_html=True)
 
@@ -279,7 +316,7 @@ if html_to_process:
     c2.metric("Issues Found", len(findings_df) if not findings_df.empty else 0)
     c3.metric("Structure Nodes", len(structure_map))
     
-    # 2. Forensic Findings (The "Exact Code" Part)
+    # 2. Forensic Findings
     st.subheader("Forensic Findings")
     st.markdown("Specific code blocks requiring remediation.")
     
@@ -288,14 +325,17 @@ if html_to_process:
             # Severity Color
             color = "#d73a49" if row['Severity'] == "High" else "#d29922"
             
-            with st.expander(f"Line {row['Line']}: {row['Issue']}"):
+            # Expandable row
+            label = f"[{row['Severity']}] {row['Issue']} @ {row['Location']}"
+            
+            with st.expander(label):
                 col_a, col_b = st.columns([3, 1])
                 
                 with col_a:
                     st.markdown("**Problematic Code:**")
                     st.markdown(f"""
                     <div class="snippet-box">
-                    <span class="line-badge">L{row['Line']}</span> <code>{row['Snippet']}</code>
+                    <span class="line-badge">{row['Location']}</span> <code>{row['Snippet']}</code>
                     </div>
                     """, unsafe_allow_html=True)
                 
