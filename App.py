@@ -44,20 +44,6 @@ st.markdown("""
         box-shadow: 0 1px 2px rgba(0,0,0,0.05);
     }
     
-    /* Line Number Badge */
-    .location-badge {
-        background-color: #f6f8fa;
-        border: 1px solid #d0d7de;
-        color: #57606a;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        margin-right: 8px;
-        display: inline-block;
-        margin-bottom: 5px;
-    }
-
     /* Sidebar */
     section[data-testid="stSidebar"] { background-color: #f6f8fa; border-right: 1px solid #d0d7de; }
     section[data-testid="stSidebar"] * { color: #24292e !important; }
@@ -70,7 +56,7 @@ st.markdown("""
         font-family: 'SFMono-Regular', Consolas, monospace;
     }
     .stTextArea textarea:focus, .stTextInput input:focus {
-        border-color: #1a7f37 !important; /* Green focus */
+        border-color: #1a7f37 !important;
         box-shadow: 0 0 0 1px #1a7f37 !important;
     }
     
@@ -84,13 +70,25 @@ st.markdown("""
         background-color: #16692e;
     }
 
+    /* Metrics */
+    .metric-container {
+        background-color: #ffffff;
+        border: 1px solid #e1e4e8;
+        border-radius: 6px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .metric-val { font-size: 2.2rem; font-weight: 700; margin-bottom: 5px; }
+    .metric-label { font-size: 0.85rem; color: #586069; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     [data-testid="stDataFrame"] { border: 1px solid #e1e4e8; }
 </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. LOGIC ENGINE (Robust Reconstruction)
+# 2. LOGIC ENGINE
 # -----------------------------------------------------------------------------
 
 def fetch_html(url):
@@ -114,17 +112,11 @@ def get_location_tag(tag, index_map):
     tag_name = tag.name
     if tag_name not in index_map: index_map[tag_name] = 0
     index_map[tag_name] += 1
-    
-    # Make it readable
     return f"{tag_name} tag #{index_map[tag_name]}"
 
 def reconstruct_tag(tag):
-    """
-    Manually rebuilds the tag string to ensure attributes are visible.
-    This fixes the empty "..." issue.
-    """
+    """Manually rebuilds the tag string."""
     try:
-        # 1. Rebuild Attributes (class="foo" id="bar")
         attrs = []
         for k, v in tag.attrs.items():
             if isinstance(v, list): v = " ".join(v)
@@ -132,21 +124,18 @@ def reconstruct_tag(tag):
         
         attr_str = " " + " ".join(attrs) if attrs else ""
         
-        # 2. Get a hint of content (first 50 chars)
-        # Strip newlines to keep it compact
         content_sample = tag.get_text(" ", strip=True)[:60]
         if content_sample:
             content_display = f"\n  {content_sample}..."
         else:
             content_display = ""
 
-        # 3. Assemble
         return f"<{tag.name}{attr_str}>{content_display}\n</{tag.name}>"
     except:
         return f"<{tag.name}>... (Complex Tag)"
 
 def analyze_html(html_content):
-    # Prefer lxml for line numbers, fallback to html.parser
+    # Try to use lxml for line numbers
     try:
         soup = BeautifulSoup(html_content, 'lxml')
     except:
@@ -166,7 +155,7 @@ def analyze_html(html_content):
                 "Issue": "Missing Alt Text",
                 "Location": loc,
                 "Snippet": reconstruct_tag(img),
-                "Fix": 'Add alt attribute describing the image.',
+                "Fix": 'Add alt="Description of image"',
                 "Why": "Screen readers cannot describe this image to visually impaired users."
             })
             score_deductions += 5
@@ -196,13 +185,9 @@ def analyze_html(html_content):
             })
             score_deductions += 5
 
-    # --- 3. DIVITIS DETECTOR (The Logic You Wanted) ---
-    # Find divs that look like they should be semantic
-    
-    # A. Fake Navs
+    # --- 3. DIVITIS DETECTOR ---
     potential_navs = soup.find_all('div', class_=re.compile(r'nav|menu|header', re.I))
     for div in potential_navs:
-        # Filter: Must have links inside to be a nav
         if div.find('a'):
             loc = get_location_tag(div, index_map)
             findings.append({
@@ -215,7 +200,6 @@ def analyze_html(html_content):
             })
             score_deductions += 5
 
-    # B. Fake Buttons (Anchors with no href)
     bad_links = soup.find_all('a')
     for a in bad_links:
         href = a.get('href', '').strip()
@@ -249,9 +233,12 @@ def analyze_html(html_content):
     structure_map = []
     for tag in soup.find_all(['h1', 'h2', 'h3', 'h4', 'main', 'nav', 'header', 'footer']):
         indent = 0
-        if tag.name.startswith('h'): indent = int(tag.name[1])
         
-        # Use the robust locator here too
+        # BUG FIX: Explicitly check if it is H1-H6 before calculating indent
+        # This prevents 'header' (which starts with 'h') from crashing int('e')
+        if tag.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+            indent = int(tag.name[1])
+        
         l_num = getattr(tag, 'sourceline', '')
         if l_num: l_num = f"L{l_num}"
         
@@ -271,9 +258,9 @@ with st.sidebar:
     st.markdown("### ⚙️ Configuration")
     st.markdown("""
     **Parser:** `lxml` (Robust)
-    <div class="tech-note">
-    <b>Forensic Reconstruction:</b> 
-    This engine rebuilds HTML tags from the DOM tree to show you exactly which ID/Class is causing the issue, even if the source code is minified.
+    <div style="font-size:0.85rem; color:#586069; background:#f6f8fa; padding:12px; border-left:3px solid #1a7f37;">
+    <b>Forensic Mode:</b> 
+    This engine reconstructs HTML tags so you can identify them in source code even if line numbers are lost (e.g. minified code).
     </div>
     """, unsafe_allow_html=True)
 
@@ -330,7 +317,6 @@ if html_to_process:
     
     if not findings_df.empty:
         for i, row in findings_df.iterrows():
-            # Header
             icon = "🔴" if row['Severity'] == "High" else "🟡"
             label = f"{icon} {row['Issue']} ({row['Location']})"
             
@@ -339,9 +325,7 @@ if html_to_process:
                 
                 with col_a:
                     st.markdown("**Problematic Code:**")
-                    st.markdown(f"""
-                    <div class="snippet-box">{row['Snippet']}</div>
-                    """, unsafe_allow_html=True)
+                    st.markdown(f"""<div class="snippet-box">{row['Snippet']}</div>""", unsafe_allow_html=True)
                 
                 with col_b:
                     st.markdown("**Action Required:**")
