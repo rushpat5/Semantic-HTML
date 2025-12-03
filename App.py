@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import requests
 
 # -----------------------------------------------------------------------------
-# 1. VISUAL CONFIGURATION (Strict Dejan Style)
+# 1. VISUAL CONFIGURATION
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="Semantic HTML Optimizer", layout="wide", page_icon="🏗️")
 
@@ -22,40 +22,23 @@ st.markdown("""
 
     .stApp { background-color: #ffffff; color: #24292e; }
     
-    /* Typography */
     h1, h2, h3, h4 {
         font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
         font-weight: 600;
-        letter-spacing: -0.3px;
         color: #111;
     }
     
-    /* Code Snippet Box */
-    .snippet-box {
-        background-color: #f6f8fa;
-        border: 1px solid #d0d7de;
-        border-left: 4px solid #cf222e; /* Red error line */
-        padding: 12px;
-        font-family: 'SFMono-Regular', Consolas, monospace;
-        font-size: 0.85rem;
-        margin: 8px 0;
-        color: #24292e;
-        white-space: pre-wrap;
-        overflow-x: auto;
+    /* Metric Cards */
+    .metric-container {
+        background-color: #ffffff;
+        border: 1px solid #e1e4e8;
+        border-radius: 6px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
-    
-    /* Line Number Badge */
-    .location-badge {
-        background-color: #24292e;
-        color: #fff;
-        padding: 2px 6px;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        margin-right: 8px;
-        display: inline-block;
-        margin-bottom: 5px;
-    }
+    .metric-val { font-size: 2.2rem; font-weight: 700; margin-bottom: 5px; }
+    .metric-label { font-size: 0.85rem; color: #586069; text-transform: uppercase; font-weight: 600; }
 
     /* Sidebar */
     section[data-testid="stSidebar"] { background-color: #f6f8fa; border-right: 1px solid #d0d7de; }
@@ -71,6 +54,13 @@ st.markdown("""
     .stTextArea textarea:focus, .stTextInput input:focus {
         border-color: #1a7f37 !important;
     }
+    
+    /* Buttons */
+    div.stButton > button {
+        background-color: #1a7f37;
+        color: white !important;
+        border: none; 
+    }
 
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     [data-testid="stDataFrame"] { border: 1px solid #e1e4e8; }
@@ -78,7 +68,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. LOGIC ENGINE (Source Code Extraction)
+# 2. LOGIC ENGINE
 # -----------------------------------------------------------------------------
 
 def fetch_html(url):
@@ -92,11 +82,11 @@ def fetch_html(url):
         return None, str(e)
 
 def get_location_tag(tag, index_map):
-    # Try lxml sourceline
+    # 1. Try lxml line number
     line = getattr(tag, 'sourceline', None)
     if line: return f"Line {line}"
     
-    # Fallback: Nth occurrence
+    # 2. Fallback: Nth occurrence
     tag_name = tag.name
     if tag_name not in index_map: index_map[tag_name] = 0
     index_map[tag_name] += 1
@@ -104,28 +94,24 @@ def get_location_tag(tag, index_map):
 
 def get_raw_html_snippet(tag):
     """
-    Returns the EXACT HTML string of the opening tag.
-    Example: <div class="nav" id="menu"> instead of "Menu Text"
+    Robustly reconstructs the opening tag string from attributes.
+    This avoids parsing errors where str(tag) returns too much or nothing.
     """
-    # Convert the tag to string but stop before the closing > to avoid inner content bloat
-    # Then manually close it.
     try:
-        # This gets the tag as a string, e.g. <div class="foo">content</div>
-        full_str = str(tag)
+        # Rebuild the tag manually: <tag class="a" id="b">
+        attributes = []
+        for key, value in tag.attrs.items():
+            # Handle list attributes like class=['btn', 'active']
+            if isinstance(value, list):
+                value = " ".join(value)
+            attributes.append(f'{key}="{value}"')
         
-        # Find the end of the opening tag
-        closing_bracket = full_str.find('>')
-        
-        if closing_bracket != -1:
-            # Return just the opening tag: <div class="foo">
-            return full_str[:closing_bracket+1]
-        else:
-            return full_str[:100] # Fallback
+        attr_str = " " + " ".join(attributes) if attributes else ""
+        return f"<{tag.name}{attr_str}>"
     except:
         return f"<{tag.name}>"
 
 def analyze_html(html_content):
-    # Prefer lxml for line numbers
     try:
         soup = BeautifulSoup(html_content, 'lxml')
     except:
@@ -146,7 +132,7 @@ def analyze_html(html_content):
                 "Location": loc,
                 "Snippet": get_raw_html_snippet(img),
                 "Fix": 'Add alt="Description of image"',
-                "Why": "Screen readers cannot describe this image to visually impaired users."
+                "Why": "Screen readers cannot describe this image."
             })
             score_deductions += 5
 
@@ -159,7 +145,7 @@ def analyze_html(html_content):
             "Location": "Global",
             "Snippet": "<html>",
             "Fix": "Add exactly one <h1> containing the main topic.",
-            "Why": "Search engines use H1 as the primary signal for page relevance."
+            "Why": "H1 is the primary relevance signal."
         })
         score_deductions += 20
     elif len(h1s) > 1:
@@ -171,14 +157,13 @@ def analyze_html(html_content):
                 "Location": loc,
                 "Snippet": get_raw_html_snippet(h1),
                 "Fix": "Change to <h2> or <div>.",
-                "Why": "Multiple H1s dilute the topical focus of the page."
+                "Why": "Multiple H1s dilute topical focus."
             })
             score_deductions += 5
 
     # --- 3. DIVITIS DETECTOR ---
     potential_navs = soup.find_all('div', class_=re.compile(r'nav|menu|header', re.I))
     for div in potential_navs:
-        # Filter: Must have links inside to be a nav
         if div.find('a'):
             loc = get_location_tag(div, index_map)
             findings.append({
@@ -195,7 +180,6 @@ def analyze_html(html_content):
     bad_links = soup.find_all('a')
     for a in bad_links:
         href = a.get('href', '').strip()
-        # Check if it's a JS trigger
         if not href or href.startswith('javascript') or href == '#':
             loc = get_location_tag(a, index_map)
             findings.append({
@@ -226,6 +210,7 @@ def analyze_html(html_content):
     structure_map = []
     for tag in soup.find_all(['h1', 'h2', 'h3', 'h4', 'main', 'nav', 'header', 'footer']):
         indent = 0
+        # Valid headings check
         if tag.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
             indent = int(tag.name[1])
         
@@ -248,9 +233,9 @@ with st.sidebar:
     st.markdown("### ⚙️ Configuration")
     st.markdown("""
     **Parser:** `lxml` (Robust)
-    <div class="tech-note">
+    <div style="font-size:0.85rem; color:#586069; background:#f6f8fa; padding:12px; border-left:3px solid #1a7f37;">
     <b>Forensic Mode:</b> 
-    This engine extracts the <b>Raw Source Code</b> of the opening tag (including classes and IDs) so you can identify the element even in minified code.
+    This engine reconstructs HTML tags so you can identify them in source code even if line numbers are lost.
     </div>
     """, unsafe_allow_html=True)
 
@@ -315,12 +300,13 @@ if html_to_process:
                 
                 with col_a:
                     st.markdown("**Problematic Code:**")
-                    st.markdown(f"""<div class="snippet-box">{row['Snippet']}</div>""", unsafe_allow_html=True)
+                    # FIXED: Use st.code() to force display of raw HTML
+                    st.code(row['Snippet'], language='html')
                 
                 with col_b:
                     st.markdown("**Action Required:**")
                     st.info(row['Fix'])
-                    st.markdown(f"*{row['Why']}*")
+                    st.caption(row['Why'])
     else:
         st.success("Clean Code! No semantic errors found.")
         
